@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	grpc_auth "github.com/grpc-ecosystem/go-grpc-middleware/auth"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"grcp_exer3/grcp-lesson/pb"
 	"io"
 	"io/ioutil"
@@ -49,6 +53,10 @@ func (*server) Download(req *pb.DownloadRequest, stream pb.FileService_DownloadS
 	filename := req.GetFilename()
 	path := "/Users/matsudomasato/go/src/grcp_exer3/grcp-lesson/storage/" + filename
 
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return status.Error(codes.NotFound, "file was not found")
+	}
+
 	file, err := os.Open(path)
 	if err != nil {
 		return err
@@ -78,7 +86,7 @@ func (*server) Download(req *pb.DownloadRequest, stream pb.FileService_DownloadS
 		if sendErr != nil {
 			return sendErr
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(5 * time.Second)
 	}
 
 	//responseが終了する
@@ -141,13 +149,45 @@ func (*server) UploadAndNotifyProgress(stream pb.FileService_UploadAndNotifyProg
 	}
 }
 
+//送る前に何か処理を入れる
+func myLogging() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+		log.Printf("[interceptor] request data: %+v", req)
+
+		resp, err = handler(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("response data: %")
+
+		return resp, nil
+	}
+}
+
+func authorize(ctx context.Context) (context.Context, error) {
+	token, err := grpc_auth.AuthFromMD(ctx, "Bearer")
+	if err != nil {
+		return nil, err
+	}
+	if token != "test-token" {
+		return nil, status.Error(codes.Unauthenticated, "token is invalid")
+	}
+
+	return ctx, nil
+}
+
 func main() {
 	lis, err := net.Listen("tcp", "localhost:50051")
 	if err != nil {
 		log.Fatal("Failed to listen: %v", err)
 	}
 
-	s := grpc.NewServer()
+	s := grpc.NewServer(grpc.UnaryInterceptor(
+		grpc_middleware.ChainUnaryServer(
+			myLogging(),
+			grpc_auth.UnaryServerInterceptor(authorize),
+		)))
+
 	//gcpに登録
 	pb.RegisterFileServiceServer(s, &server{})
 

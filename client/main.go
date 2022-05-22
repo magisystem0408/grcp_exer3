@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"grcp_exer3/grcp-lesson/pb"
 	"io"
 	"log"
@@ -23,13 +26,20 @@ func main() {
 	//file servese client
 	client := pb.NewFileServiceClient(conn)
 	//callListFiles(client)
-	//callDownload(client)
+	callDownload(client)
 	//CallUpload(client)
-	CallUploadAndNotifyProgress(client)
+	//CallUploadAndNotifyProgress(client)
 }
 
 func callListFiles(client pb.FileServiceClient) {
-	res, err := client.ListFiles(context.Background(), &pb.ListFilesRequest{})
+	md := metadata.New(map[string]string{
+		//"authorization": "Bearer bad-token",
+		"authorization": "Bearer test-token",
+	})
+
+	ctx := metadata.NewOutgoingContext(context.Background(), md)
+
+	res, err := client.ListFiles(ctx, &pb.ListFilesRequest{})
 
 	if err != nil {
 		log.Fatalln(err)
@@ -39,8 +49,15 @@ func callListFiles(client pb.FileServiceClient) {
 }
 
 func callDownload(client pb.FileServiceClient) {
+
+	// deadlineの調整
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	req := &pb.DownloadRequest{Filename: "name.txt"}
-	stream, err := client.Download(context.Background(), req)
+	//req := &pb.DownloadRequest{Filename: "mamushi.txt"}
+
+	stream, err := client.Download(ctx, req)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -52,6 +69,19 @@ func callDownload(client pb.FileServiceClient) {
 			break
 		}
 		if err != nil {
+			// end of fileが送られてきた時に、errorがgrpcのエラーかを調べる
+			resErr, ok := status.FromError(err)
+			if ok {
+				if resErr.Code() == codes.NotFound {
+					log.Fatalf("Error Code: %v", "Error Message: %v", resErr.Code(), resErr.Message())
+				} else if resErr.Code() == codes.DeadlineExceeded {
+					log.Fatalln("deedline exceeded")
+				} else {
+					log.Fatalln("unknown grpc error")
+				}
+			} else {
+				log.Fatalln(err)
+			}
 			log.Fatalln(err)
 		}
 		log.Printf("Response from Download(butes): %v", res.GetData())
